@@ -1,10 +1,11 @@
 # streamlit_app.py
 
-from turtle import color
 import streamlit as st
 import pandas as pd
-import matplotlib.pyplot as plt
 import numpy as np
+import plotly.express as px
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
 from utils.data_loader import fetch_stock_data
 from indicators.rsi import rsi
@@ -13,12 +14,11 @@ from indicators.ema import ema
 from indicators.macd import macd
 from strategy.rule_based_strategy import generate_signals_sma, generate_signals_ema
 from utils.backtester import backtest_signals
-#from utils.google_sheets import log_to_google_sheets,create_or_get_spreadsheet,
 
-# ADD THE FUNCTION HERE - RIGHT AFTER IMPORTS
+# Function to display strategy results with Plotly
 def display_strategy_results(df, results, metrics, strategy_name, period_short, period_long, initial_cash, selected_stock):
     """
-    Display comprehensive strategy results in Streamlit interface
+    Display comprehensive strategy results in Streamlit interface using Plotly
     """
     
     # Performance metrics in columns
@@ -46,112 +46,351 @@ def display_strategy_results(df, results, metrics, strategy_name, period_short, 
     buy_signals = df[df[signal_col] == 1]
     sell_signals = df[df[signal_col] == -1]
     
-    # Main price chart with signals
+    # 1. Main price chart with signals and moving averages
     st.subheader(f"📉 {selected_stock} Price Chart with {strategy_name} Strategy")
-    fig1, ax1 = plt.subplots(figsize=(14, 8))
     
-    # Plot price and moving averages
-    ax1.plot(df.index, df['Close'], label='Close Price', alpha=0.8, linewidth=2.5, color='black')
-    ax1.plot(df.index, df[f'{strategy_name}{period_short}'], 
-             label=f'{strategy_name}{period_short}', alpha=0.8, linewidth=2, color='blue')
-    ax1.plot(df.index, df[f'{strategy_name}{period_long}'], 
-             label=f'{strategy_name}{period_long}', alpha=0.8, linewidth=2, color='red')
+    fig_price = go.Figure()
     
-    # Plot buy/sell signals
+    # Add price line
+    fig_price.add_trace(go.Scatter(
+        x=df.index,
+        y=df['Close'],
+        mode='lines',
+        name='Close Price',
+        line=dict(color='purple', width=2),
+        hovertemplate='<b>Price</b>: ₹%{y:.2f}<br><b>Date</b>: %{x}<extra></extra>'
+    ))
+    
+    # Add moving averages
+    fig_price.add_trace(go.Scatter(
+        x=df.index,
+        y=df[f'{strategy_name}{period_short}'],
+        mode='lines',
+        name=f'{strategy_name}{period_short}',
+        line=dict(color='blue', width=2),
+        hovertemplate=f'<b>{strategy_name}{period_short}</b>: ₹%{{y:.2f}}<br><b>Date</b>: %{{x}}<extra></extra>'
+    ))
+    
+    fig_price.add_trace(go.Scatter(
+        x=df.index,
+        y=df[f'{strategy_name}{period_long}'],
+        mode='lines',
+        name=f'{strategy_name}{period_long}',
+        line=dict(color='red', width=2),
+        hovertemplate=f'<b>{strategy_name}{period_long}</b>: ₹%{{y:.2f}}<br><b>Date</b>: %{{x}}<extra></extra>'
+    ))
+    
+    # Add buy signals
     if not buy_signals.empty:
-        ax1.scatter(buy_signals.index, buy_signals['Close'], 
-                   marker='^', s=120, color='green', label='Buy Signal', zorder=5, alpha=0.8)
+        fig_price.add_trace(go.Scatter(
+            x=buy_signals.index,
+            y=buy_signals['Close'],
+            mode='markers',
+            name='Buy Signal',
+            marker=dict(
+                symbol='triangle-up',
+                size=12,
+                color='green',
+                line=dict(color='darkgreen', width=1)
+            ),
+            hovertemplate='<b>BUY</b><br><b>Price</b>: ₹%{y:.2f}<br><b>Date</b>: %{x}<extra></extra>'
+        ))
+    
+    # Add sell signals
     if not sell_signals.empty:
-        ax1.scatter(sell_signals.index, sell_signals['Close'], 
-                   marker='v', s=120, color='red', label='Sell Signal', zorder=5, alpha=0.8)
+        fig_price.add_trace(go.Scatter(
+            x=sell_signals.index,
+            y=sell_signals['Close'],
+            mode='markers',
+            name='Sell Signal',
+            marker=dict(
+                symbol='triangle-down',
+                size=12,
+                color='red',
+                line=dict(color='darkred', width=1)
+            ),
+            hovertemplate='<b>SELL</b><br><b>Price</b>: ₹%{y:.2f}<br><b>Date</b>: %{x}<extra></extra>'
+        ))
     
-    ax1.set_title(f"{selected_stock} - {strategy_name} Strategy Signals", fontsize=16, fontweight='bold')
-    ax1.set_ylabel("Price (₹)", fontsize=12)
-    ax1.legend(loc='upper left', fontsize=10)
-    ax1.grid(True, alpha=0.3)
-    plt.tight_layout()
-    st.pyplot(fig1)
+    # Add trend zones
+    fig_price.add_trace(go.Scatter(
+        x=df.index,
+        y=df[f'{strategy_name}{period_short}'],
+        fill=None,
+        mode='lines',
+        line_color='rgba(0,0,0,0)',
+        showlegend=False
+    ))
     
-    # Portfolio performance comparison
+    fig_price.add_trace(go.Scatter(
+        x=df.index,
+        y=df[f'{strategy_name}{period_long}'],
+        fill='tonexty',
+        mode='lines',
+        line_color='rgba(0,0,0,0)',
+        fillcolor='rgba(0,255,0,0.1)',
+        name='Bullish Zone',
+        showlegend=True
+    ))
+    
+    fig_price.update_layout(
+        title=f"{selected_stock} - {strategy_name} Strategy Signals",
+        xaxis_title="Date",
+        yaxis_title="Price (₹)",
+        height=600,
+        hovermode='x unified',
+        template='plotly_white'
+    )
+    
+    st.plotly_chart(fig_price, use_container_width=True)
+    
+    # 2. Portfolio performance comparison
     st.subheader("📈 Portfolio Performance vs Buy & Hold")
-    fig2, ax2 = plt.subplots(figsize=(14, 6))
     
-    # Strategy equity curve
-    ax2.plot(results.index, results['Total'], label='Strategy Portfolio', 
-             color='green', linewidth=3, alpha=0.9)
-    
-    # Buy & hold comparison
+    # Calculate buy & hold
     buy_hold_value = initial_cash * (df['Close'] / df['Close'].iloc[0])
-    ax2.plot(df.index, buy_hold_value, label='Buy & Hold', 
-             color='blue', linewidth=2.5, alpha=0.8, linestyle='--')
     
-    ax2.set_title("Strategy Performance Comparison", fontsize=16, fontweight='bold')
-    ax2.set_ylabel("Portfolio Value (₹)", fontsize=12)
-    ax2.legend(fontsize=12)
-    ax2.grid(True, alpha=0.3)
-    plt.tight_layout()
-    st.pyplot(fig2)
+    fig_perf = go.Figure()
     
-    # Technical indicators in columns
+    fig_perf.add_trace(go.Scatter(
+        x=results.index,
+        y=results['Total'],
+        mode='lines',
+        name='Strategy Portfolio',
+        line=dict(color='green', width=3),
+        hovertemplate='<b>Strategy</b>: ₹%{y:,.0f}<br><b>Date</b>: %{x}<extra></extra>'
+    ))
+    
+    fig_perf.add_trace(go.Scatter(
+        x=df.index,
+        y=buy_hold_value,
+        mode='lines',
+        name='Buy & Hold',
+        line=dict(color='blue', width=2, dash='dash'),
+        hovertemplate='<b>Buy & Hold</b>: ₹%{y:,.0f}<br><b>Date</b>: %{x}<extra></extra>'
+    ))
+    
+    fig_perf.update_layout(
+        title="Strategy vs Buy & Hold Performance",
+        xaxis_title="Date",
+        yaxis_title="Portfolio Value (₹)",
+        height=500,
+        hovermode='x unified',
+        template='plotly_white'
+    )
+    
+    st.plotly_chart(fig_perf, use_container_width=True)
+    
+    # 3. Technical indicators in columns
     col1, col2 = st.columns(2)
     
     with col1:
         st.subheader("💹 RSI Indicator")
-        fig3, ax3 = plt.subplots(figsize=(12, 5))
-        ax3.plot(df.index, df['RSI'], color='purple', linewidth=2, label='RSI')
-        ax3.axhline(30, color='red', linestyle='--', alpha=0.7, label='Oversold (30)')
-        ax3.axhline(70, color='green', linestyle='--', alpha=0.7, label='Overbought (70)')
-        ax3.axhline(50, color='gray', linestyle='-', alpha=0.5, label='Midline (50)')
         
-        # Fill overbought/oversold regions
-        ax3.fill_between(df.index, 0, 30, alpha=0.1, color='red')
-        ax3.fill_between(df.index, 70, 100, alpha=0.1, color='green')
+        fig_rsi = go.Figure()
         
-        ax3.set_title("RSI with Trading Signals", fontsize=14, fontweight='bold')
-        ax3.set_ylabel("RSI Value", fontsize=11)
-        ax3.set_ylim(0, 100)
-        ax3.legend(fontsize=9)
-        ax3.grid(True, alpha=0.3)
-        plt.tight_layout()
-        st.pyplot(fig3)
+        # RSI line
+        fig_rsi.add_trace(go.Scatter(
+            x=df.index,
+            y=df['RSI'],
+            mode='lines',
+            name='RSI',
+            line=dict(color='purple', width=2),
+            hovertemplate='<b>RSI</b>: %{y:.1f}<br><b>Date</b>: %{x}<extra></extra>'
+        ))
+        
+        # Overbought/Oversold lines
+        fig_rsi.add_hline(y=70, line_dash="dash", line_color="red", 
+                         annotation_text="Overbought (70)")
+        fig_rsi.add_hline(y=30, line_dash="dash", line_color="green", 
+                         annotation_text="Oversold (30)")
+        fig_rsi.add_hline(y=50, line_dash="solid", line_color="gray", 
+                         annotation_text="Midline (50)", opacity=0.5)
+        
+        # Fill zones
+        fig_rsi.add_hrect(y0=0, y1=30, fillcolor="red", opacity=0.1, 
+                         line_width=0, annotation_text="Oversold Zone")
+        fig_rsi.add_hrect(y0=70, y1=100, fillcolor="green", opacity=0.1, 
+                         line_width=0, annotation_text="Overbought Zone")
+        
+        # Add buy/sell signals on RSI
+        if not buy_signals.empty:
+            fig_rsi.add_trace(go.Scatter(
+                x=buy_signals.index,
+                y=buy_signals['RSI'],
+                mode='markers',
+                name='Buy Signal',
+                marker=dict(symbol='triangle-up', size=10, color='green'),
+                showlegend=False
+            ))
+        
+        if not sell_signals.empty:
+            fig_rsi.add_trace(go.Scatter(
+                x=sell_signals.index,
+                y=sell_signals['RSI'],
+                mode='markers',
+                name='Sell Signal',
+                marker=dict(symbol='triangle-down', size=10, color='red'),
+                showlegend=False
+            ))
+        
+        fig_rsi.update_layout(
+            title="RSI with Trading Signals",
+            xaxis_title="Date",
+            yaxis_title="RSI Value",
+            height=400,
+            yaxis=dict(range=[0, 100]),
+            template='plotly_white'
+        )
+        
+        st.plotly_chart(fig_rsi, use_container_width=True)
     
     with col2:
         st.subheader("📊 MACD Indicator")
-        fig4, ax4 = plt.subplots(figsize=(12, 5))
         
-        # MACD lines
-        ax4.plot(df.index, df['MACD'], label='MACD', color='blue', linewidth=2)
-        ax4.plot(df.index, df['MACD_signal'], label='Signal Line', color='orange', linewidth=2)
+        fig_macd = make_subplots(rows=2, cols=1, 
+                                shared_xaxes=True,
+                                vertical_spacing=0.05,
+                                row_width=[0.7, 0.3])
         
-        # MACD histogram with colors
+        # MACD line
+        fig_macd.add_trace(go.Scatter(
+            x=df.index,
+            y=df['MACD'],
+            mode='lines',
+            name='MACD',
+            line=dict(color='blue', width=2),
+            hovertemplate='<b>MACD</b>: %{y:.3f}<extra></extra>'
+        ), row=1, col=1)
+        
+        # Signal line
+        fig_macd.add_trace(go.Scatter(
+            x=df.index,
+            y=df['MACD_signal'],
+            mode='lines',
+            name='Signal Line',
+            line=dict(color='orange', width=2),
+            hovertemplate='<b>Signal</b>: %{y:.3f}<extra></extra>'
+        ), row=1, col=1)
+        
+        # Zero line
+        fig_macd.add_hline(y=0, line_dash="solid", line_color="pink", 
+                          opacity=0.5, row=1, col=1)
+        
+        # MACD histogram
         colors = ['green' if val >= 0 else 'red' for val in df['MACD_hist']]
-        ax4.bar(df.index, df['MACD_hist'], label='MACD Histogram', 
-               color=colors, alpha=0.6, width=1)
+        fig_macd.add_trace(go.Bar(
+            x=df.index,
+            y=df['MACD_hist'],
+            name='MACD Histogram',
+            marker_color=colors,
+            opacity=0.6,
+            hovertemplate='<b>Histogram</b>: %{y:.3f}<extra></extra>'
+        ), row=2, col=1)
         
-        ax4.axhline(0, color='black', linestyle='-', alpha=0.5)
-        ax4.set_title("MACD Indicator", fontsize=14, fontweight='bold')
-        ax4.set_ylabel("MACD Value", fontsize=11)
-        ax4.legend(fontsize=9)
-        ax4.grid(True, alpha=0.3)
-        plt.tight_layout()
-        st.pyplot(fig4)
+        fig_macd.update_layout(
+            title="MACD Indicator",
+            height=500,
+            template='plotly_white',
+            showlegend=True
+        )
         
-    st.subheader("📈 Bollinger Bands")
-    fig5, ax5 = plt.subplots(figsize=(12, 5))
-    ax5.plot(df.index, df['Close'], label='Close Price', color='black', linewidth=2)
-    ax5.plot(df.index, df['SMA20'], label='20-day SMA', color='blue', linewidth=1.5)
-    ax5.plot(df.index, df['Upper_Band'], label='Upper Band', color='red', linestyle='--', linewidth=1.5)
-    ax5.plot(df.index, df['Lower_Band'], label='Lower Band', color='green', linestyle='--', linewidth=1.5)
-    ax5.fill_between(df.index, df['Upper_Band'], df['Lower_Band'],
-                     color='lightgray', alpha=0.3, label='Bollinger Bands Area')
-    ax5.set_title("Bollinger Bands", fontsize=14, fontweight='bold')
-    ax5.set_ylabel("Price (₹)", fontsize=11)
-    ax5.legend(fontsize=9)
-    ax5.grid(True, alpha=0.3)
-    plt.tight_layout()
-    st.pyplot(fig5)
+        fig_macd.update_xaxes(title_text="Date", row=2, col=1)
+        fig_macd.update_yaxes(title_text="MACD Value", row=1, col=1)
+        fig_macd.update_yaxes(title_text="Histogram", row=2, col=1)
+        
+        st.plotly_chart(fig_macd, use_container_width=True)
     
-    # Trade analysis
+    # 4. Bollinger Bands
+    st.subheader("📈 Bollinger Bands")
+    
+    fig_bb = go.Figure()
+    
+    # Price line
+    fig_bb.add_trace(go.Scatter(
+        x=df.index,
+        y=df['Close'],
+        mode='lines',
+        name='Close Price',
+        line=dict(color='purple', width=2),
+        hovertemplate='<b>Price</b>: ₹%{y:.2f}<extra></extra>'
+    ))
+    
+    # 20-day SMA
+    fig_bb.add_trace(go.Scatter(
+        x=df.index,
+        y=df['SMA20'],
+        mode='lines',
+        name='20-day SMA',
+        line=dict(color='blue', width=1.5),
+        hovertemplate='<b>SMA20</b>: ₹%{y:.2f}<extra></extra>'
+    ))
+    
+    # Upper Band
+    fig_bb.add_trace(go.Scatter(
+        x=df.index,
+        y=df['Upper_Band'],
+        mode='lines',
+        name='Upper Band',
+        line=dict(color='red', dash='dash', width=1.5),
+        hovertemplate='<b>Upper Band</b>: ₹%{y:.2f}<extra></extra>'
+    ))
+    
+    # Lower Band with fill
+    fig_bb.add_trace(go.Scatter(
+        x=df.index,
+        y=df['Lower_Band'],
+        mode='lines',
+        name='Lower Band',
+        line=dict(color='green', dash='dash', width=1.5),
+        fill='tonexty',
+        fillcolor='rgba(128,128,128,0.2)',
+        hovertemplate='<b>Lower Band</b>: ₹%{y:.2f}<extra></extra>'
+    ))
+    
+    fig_bb.update_layout(
+        title="Bollinger Bands",
+        xaxis_title="Date",
+        yaxis_title="Price (₹)",
+        height=500,
+        template='plotly_white'
+    )
+    
+    st.plotly_chart(fig_bb, use_container_width=True)
+    
+    # 5. Drawdown Analysis
+    st.subheader("📉 Drawdown Analysis")
+    
+    # Calculate drawdown
+    returns = results['Total'].pct_change().fillna(0)
+    cumulative = (1 + returns).cumprod()
+    running_max = cumulative.expanding().max()
+    drawdown = (cumulative - running_max) / running_max
+    
+    fig_dd = go.Figure()
+    
+    fig_dd.add_trace(go.Scatter(
+        x=df.index,
+        y=drawdown * 100,
+        mode='lines',
+        name='Drawdown',
+        fill='tozeroy',
+        fillcolor='rgba(255,0,0,0.3)',
+        line=dict(color='red', width=1),
+        hovertemplate='<b>Drawdown</b>: %{y:.1f}%<extra></extra>'
+    ))
+    
+    fig_dd.update_layout(
+        title="Portfolio Drawdown Over Time",
+        xaxis_title="Date",
+        yaxis_title="Drawdown (%)",
+        height=400,
+        template='plotly_white'
+    )
+    
+    st.plotly_chart(fig_dd, use_container_width=True)
+    
+    # 6. Trade analysis
     if not metrics['Trades DataFrame'].empty:
         st.subheader("📋 Trade Analysis")
         
@@ -171,6 +410,65 @@ def display_strategy_results(df, results, metrics, strategy_name, period_short, 
         with col3:
             worst_trade = trades_df['return_pct'].min()
             st.metric("💥 Worst Trade", f"{worst_trade:.2%}")
+        
+        # Trade returns distribution
+        st.subheader("📊 Trade Returns Distribution")
+        
+        returns_pct = trades_df['return_pct'] * 100
+        
+        fig_hist = px.histogram(
+            x=returns_pct,
+            nbins=20,
+            title="Distribution of Trade Returns",
+            labels={'x': 'Return (%)', 'y': 'Number of Trades'},
+            color_discrete_sequence=['steelblue']
+        )
+        
+        # Add vertical lines for mean and zero
+        fig_hist.add_vline(x=0, line_dash="dash", line_color="red", 
+                          annotation_text="Break Even")
+        fig_hist.add_vline(x=returns_pct.mean(), line_dash="solid", line_color="green", 
+                          annotation_text=f"Mean: {returns_pct.mean():.1f}%")
+        
+        fig_hist.update_layout(
+            height=400,
+            template='plotly_white',
+            showlegend=False
+        )
+        
+        st.plotly_chart(fig_hist, use_container_width=True)
+        
+        # Trade timeline
+        st.subheader("📅 Trade Timeline")
+        
+        fig_timeline = go.Figure()
+        
+        for i, trade in trades_df.iterrows():
+            color = 'green' if trade['return_pct'] > 0 else 'red'
+            fig_timeline.add_trace(go.Scatter(
+                x=[trade['entry_date'], trade['exit_date']],
+                y=[trade['entry_price'], trade['exit_price']],
+                mode='lines+markers',
+                name=f"Trade {i+1}",
+                line=dict(color=color, width=3),
+                marker=dict(size=8),
+                hovertemplate=f'<b>Trade {i+1}</b><br>' +
+                             f'Entry: ₹{trade["entry_price"]:.2f}<br>' +
+                             f'Exit: ₹{trade["exit_price"]:.2f}<br>' +
+                             f'Return: {trade["return_pct"]:.2%}<br>' +
+                             f'Duration: {(pd.to_datetime(trade["exit_date"]) - pd.to_datetime(trade["entry_date"])).days} days<extra></extra>',
+                showlegend=False
+            ))
+        
+        fig_timeline.update_layout(
+            title="Individual Trade Performance Timeline",
+            xaxis_title="Date",
+            yaxis_title="Price (₹)",
+            height=500,
+            template='plotly_white'
+        )
+        
+        st.plotly_chart(fig_timeline, use_container_width=True)
         
         # Trade history table
         st.subheader("📊 Detailed Trade History")
@@ -194,7 +492,7 @@ def display_strategy_results(df, results, metrics, strategy_name, period_short, 
     else:
         st.info("📝 No trades were executed during this period with the current parameters.")
     
-    # Signal summary table
+    # 7. Signal summary table
     st.subheader("📋 Trading Signals Summary")
     signal_summary = df[df[signal_col] != 0].copy()
     
@@ -231,7 +529,7 @@ stocks = ['ADANIENT.NS', 'ADANIPORTS.NS', 'APOLLOHOSP.NS', 'ASIANPAINT.NS', 'AXI
           'NESTLEIND.NS', 'NTPC.NS', 'ONGC.NS', 'POWERGRID.NS', 'RELIANCE.NS', 
           'SBILIFE.NS', 'SHRIRAMFIN.NS', 'SBIN.NS', 'SUNPHARMA.NS', 'TATACONSUM.NS', 
           'TCS.NS', 'TATAMOTORS.NS', 'TATASTEEL.NS', 'TECHM.NS', 'TITAN.NS', 
-          'TRENT.NS', 'ULTRACEMCO.NS', 'WIPRO.NS', 'ZOMATO.NS']
+          'TRENT.NS', 'ULTRACEMCO.NS', 'WIPRO.NS', 'ETERNAL.NS']
 
 selected_stock = st.sidebar.selectbox("Select Stock", stocks)
 start_date = st.sidebar.date_input("Start Date", pd.to_datetime("2024-01-01"))

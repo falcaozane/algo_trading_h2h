@@ -4,8 +4,7 @@ import numpy as np
 import yfinance as yf
 import pickle
 import plotly.graph_objects as go
-import plotly.express as px
-from sklearn.preprocessing import RobustScaler 
+import plotly.express as px 
 from datetime import datetime, timedelta
 import warnings
 from curl_cffi import requests
@@ -43,7 +42,12 @@ STOCK_SYMBOLS = [
 
 # User inputs
 selected_stock = st.sidebar.selectbox("Select Stock Symbol", STOCK_SYMBOLS, index=35)  # Default to RELIANCE.NS
-prediction_mode = st.sidebar.radio("Prediction Mode", ["Latest Data", "Manual Input"])
+start_date = st.sidebar.date_input("Start Date", value=datetime(2020, 1, 1))
+end_date = st.sidebar.date_input("End Date", value=datetime.now())
+prediction_mode = st.sidebar.button("Start Analysis")
+rsi_period = st.sidebar.slider("RSI Period", min_value=5, max_value=30, value=14, step=1)
+short_period = st.sidebar.slider("Short-term", min_value=5, max_value=50, value=20, step=1)
+long_period = st.sidebar.slider("Long-term", min_value=50, max_value=200, value=50, step=1)
 
 # Helper functions (same as in your original code)
 def SMA(series, period):
@@ -140,12 +144,12 @@ def process_stock_data(df):
     df = df.copy()
     
     # Basic technical indicators
-    df['SMA20'] = SMA(df['Close'], 20)
-    df['SMA50'] = SMA(df['Close'], 50)
-    df['EMA20'] = EMA(df['Close'], 20)
-    df['EMA50'] = EMA(df['Close'], 50)
-    df['RSI14'] = RSI(df['Close'], 14)
-    df['RSI20'] = RSI(df['Close'], 20)
+    df['SMA20'] = SMA(df['Close'], short_period)
+    df['SMA50'] = SMA(df['Close'], long_period)
+    df['EMA20'] = EMA(df['Close'], short_period)
+    df['EMA50'] = EMA(df['Close'], long_period)
+    df['RSI14'] = RSI(df['Close'], rsi_period)
+    df['RSI20'] = RSI(df['Close'], rsi_period + 6)  # Example for another RSI period
     df['MACD'], df['MACD_signal'], df['MACD_hist'] = MACD(df['Close'])
     
     # Create feature sets
@@ -158,7 +162,9 @@ def process_stock_data(df):
     # Additional features
     df['SMA_crossover'] = (df['SMA20'] > df['SMA50']).astype(int)
     df['RSI_oversold'] = (df['RSI14'] < 30).astype(int)
+    # Target: next-day up/down
     df['next_close'] = df['Close'].shift(-1)
+    df['target'] = (df['next_close'] > df['Close']).astype(int)
     
     return df
 
@@ -189,25 +195,21 @@ FEATURES = [
     'momentum_3d', 'momentum_5d', 'momentum_10d', 'momentum_20d', 'roc_5d',
     'roc_10d', 'high_10d', 'low_10d', 'price_position_10', 'high_20d',
     'low_20d', 'price_position_20', 'high_50d', 'low_50d',
-    'price_position_50', 'bb_upper', 'bb_lower', 'bb_position',
-    'SMA_crossover', 'RSI_oversold', 'next_close'
+    'price_position_50', 'bb_upper', 'bb_lower', 'bb_position','target'
 ]
 
 # Main app logic
-if prediction_mode == "Latest Data":
-    st.header(f"📊 Latest Data Prediction for {selected_stock}")
+st.header(f"📊 Latest Data Prediction for {selected_stock}")
     
-    # Load recent data
-    end_date = datetime.now()
-    start_date = end_date - timedelta(days=365)  # Get 1 year of data for feature calculation
     
-    with st.spinner("Loading stock data..."):
-        stock_data = load_stock_data(selected_stock, start_date, end_date)
+with st.spinner("Loading stock data..."):
+    stock_data = load_stock_data(selected_stock, start_date, end_date)
     
     if stock_data is not None and not stock_data.empty:
         # Process the data
         processed_data = process_stock_data(stock_data)
         processed_data = processed_data.dropna()
+        
         
         if len(processed_data) > 0:
             # Get the latest row for prediction
@@ -233,9 +235,6 @@ if prediction_mode == "Latest Data":
             model = pickle.load(open('logistic_regression_model.pkl', 'rb'))
             scaler = pickle.load(open('scaler.pkl', 'rb'))  # You'd need to save this too
             
-            # Mock prediction (replace with actual model prediction)
-            # mock_prediction = np.random.choice([0, 1])  # Random for demo
-            # mock_probability = np.random.uniform(0.4, 0.9)  # Random probability
             
             # Scale the features
             feature_vector_scaled = scaler.transform(feature_vector)
@@ -284,7 +283,39 @@ if prediction_mode == "Latest Data":
             # Technical indicators chart
             st.header("📈 Technical Analysis")
             
-            # Price and moving averages
+            # Price and  Simple moving averages
+            fig_price = go.Figure()
+            fig_price.add_trace(go.Scatter(
+                x=processed_data.index[-60:], 
+                y=processed_data['Close'][-60:],
+                mode='lines',
+                name='Close Price',
+                line=dict(color='blue', width=2)
+            ))
+            fig_price.add_trace(go.Scatter(
+                x=processed_data.index[-60:], 
+                y=processed_data['SMA20'][-60:],
+                mode='lines',
+                name='SMA20',
+                line=dict(color='orange', width=1)
+            ))
+            fig_price.add_trace(go.Scatter(
+                x=processed_data.index[-60:], 
+                y=processed_data['SMA50'][-60:],
+                mode='lines',
+                name='SMA50',
+                line=dict(color='red', width=1)
+            ))
+            
+            fig_price.update_layout(
+                title=f"{selected_stock} - Price and Simple Moving Averages (Last 60 Days)",
+                xaxis_title="Date",
+                yaxis_title="Price (₹)",
+                height=400
+            )
+            st.plotly_chart(fig_price, use_container_width=True)
+            
+            # Price and Exponential moving averages
             fig_price = go.Figure()
             fig_price.add_trace(go.Scatter(
                 x=processed_data.index[-30:], 
@@ -295,21 +326,21 @@ if prediction_mode == "Latest Data":
             ))
             fig_price.add_trace(go.Scatter(
                 x=processed_data.index[-30:], 
-                y=processed_data['SMA20'][-30:],
+                y=processed_data['EMA20'][-30:],
                 mode='lines',
-                name='SMA20',
+                name='EMA20',
                 line=dict(color='orange', width=1)
             ))
             fig_price.add_trace(go.Scatter(
                 x=processed_data.index[-30:], 
-                y=processed_data['SMA50'][-30:],
+                y=processed_data['EMA50'][-30:],
                 mode='lines',
-                name='SMA50',
+                name='EMA50',
                 line=dict(color='red', width=1)
             ))
             
             fig_price.update_layout(
-                title=f"{selected_stock} - Price and Moving Averages (Last 30 Days)",
+                title=f"{selected_stock} - Price and Exponential Moving Averages (Last 60 Days)",
                 xaxis_title="Date",
                 yaxis_title="Price (₹)",
                 height=400
@@ -383,43 +414,7 @@ if prediction_mode == "Latest Data":
     else:
         st.error("Unable to load stock data. Please check the symbol and try again.")
 
-else:  # Manual Input mode
-    st.header("🔧 Manual Feature Input")
-    st.write("Enter the technical indicators manually for prediction:")
-    
-    # Create input fields for key features
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        close_price = st.number_input("Close Price", value=100.0, min_value=0.01)
-        volume = st.number_input("Volume", value=1000000, min_value=1)
-        rsi14 = st.number_input("RSI14", value=50.0, min_value=0.0, max_value=100.0)
-        macd = st.number_input("MACD", value=0.0)
-    
-    with col2:
-        sma20 = st.number_input("SMA20", value=100.0, min_value=0.01)
-        sma50 = st.number_input("SMA50", value=100.0, min_value=0.01)
-        volatility_5d = st.number_input("5-Day Volatility", value=0.02, min_value=0.0)
-        return_1d = st.number_input("1-Day Return", value=0.0)
-    
-    with col3:
-        return_lag_1 = st.number_input("Previous Day Return", value=0.0)
-        volume_ratio_20 = st.number_input("Volume Ratio (20-day)", value=1.0, min_value=0.01)
-        momentum_5d = st.number_input("5-Day Momentum", value=0.0)
-        price_position_20 = st.number_input("Price Position (20-day)", value=0.5, min_value=0.0, max_value=1.0)
-    
-    if st.button("🔮 Make Prediction", type="primary"):
-        # Create feature vector (simplified for demo)
-        # In real implementation, you'd need all 57 features
-        mock_prediction = np.random.choice([0, 1])
-        mock_probability = np.random.uniform(0.4, 0.9)
-        
-        # Display result
-        st.header("Prediction Result")
-        if mock_prediction == 1:
-            st.success(f"📈 **PREDICTION: UP** (Confidence: {mock_probability:.1%})")
-        else:
-            st.error(f"📉 **PREDICTION: DOWN** (Confidence: {mock_probability:.1%})")
+
 
 # Sidebar information
 st.sidebar.markdown("---")
@@ -427,7 +422,7 @@ st.sidebar.header("ℹ️ About")
 st.sidebar.write("""
 This app uses a Logistic Regression model trained on:
 - **50 Indian stocks** from NSE
-- **57 technical features** including RSI, MACD, moving averages, volatility measures, and lag features
+- **59 technical features** including RSI, MACD, moving averages, volatility measures, and lag features
 - **Historical data** for pattern recognition
 
 **Disclaimer**: This is for educational purposes only. Always do your own research before making investment decisions.
@@ -435,10 +430,11 @@ This app uses a Logistic Regression model trained on:
 
 st.sidebar.markdown("---")
 st.sidebar.write("**Model Performance:**")
-st.sidebar.write("• Accuracy: ~55-60%")
-st.sidebar.write("• F1 Score: ~0.58")
-st.sidebar.write("• AUC: ~0.60")
+st.sidebar.write("• Accuracy: 55%")
+st.sidebar.write("• F1 Score: 0.4839")
+st.sidebar.write("• AUC: 0.5370")
+st.sidebar.write("Average Precision (AP): 0.5300")
 
 # Footer
 st.markdown("---")
-st.markdown("**⚠️ Disclaimer**: This prediction model is for educational and research purposes only. Stock market investments are subject to market risks. Please consult with a financial advisor before making investment decisions.")
+st.markdown("**⚠️ Disclaimer**: This prediction model is for research purposes only. Stock market investments are subject to market risks. Please consult with a financial advisor before making investment decisions.")
