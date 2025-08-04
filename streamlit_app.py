@@ -123,7 +123,7 @@ def process_stock_data(df, short_period, long_period, rsi_period):
 # ========================= MAIN APPLICATION =========================
 
 # Main navigation
-st.title("📈 Complete Stock Trading & Prediction Platform")
+st.title("📈 Stock Trading & Prediction Platform")
 
 # Navigation tabs
 tab1, tab2 = st.tabs(["🔮 Price Prediction", "📊 Trading Dashboard"])
