@@ -1,0 +1,12 @@
+# Placeholder for requirements.txt
+
+pandas
+numpy
+matplotlib
+yfinance
+streamlit
+
+gspread
+google-auth
+google-auth-oauthlib
+google-auth-httplib2

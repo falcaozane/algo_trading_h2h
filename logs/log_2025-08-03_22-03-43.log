@@ -1,0 +1,7 @@
+2025-08-03 22:03:43,463 [INFO] - Logger initialized.
+2025-08-03 22:03:43,463 [INFO] - Fetching data for RELIANCE.NS from 2024-02-01 to 2025-08-03 22:03:39.386764
+2025-08-03 22:03:49,344 [INFO] - Downloaded 372 rows for RELIANCE.NS
+2025-08-03 22:04:04,219 [INFO] - Fetching data for TCS.NS from 2024-02-01 to 2025-08-03 22:03:39.386764
+2025-08-03 22:04:04,496 [INFO] - Downloaded 372 rows for TCS.NS
+2025-08-03 22:04:08,637 [INFO] - Fetching data for INFY.NS from 2024-02-01 to 2025-08-03 22:03:39.386764
+2025-08-03 22:04:08,888 [INFO] - Downloaded 372 rows for INFY.NS

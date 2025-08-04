@@ -1,0 +1,65 @@
+# main.py
+
+from utils.logger import setup_logger
+from utils.data_loader import fetch_stock_data
+from indicators.rsi import rsi
+from indicators.sma import sma
+from indicators.macd import macd
+from strategy.rule_based_strategy import generate_signals
+from utils.backtester import backtest_signals
+
+import pandas as pd
+import matplotlib.pyplot as plt
+
+# ---------------------- Configuration ----------------------
+STOCK = 'RELIANCE.NS'
+START_DATE = '2024-02-01'
+
+# Indicator Parameters
+RSI_PERIOD = 14
+SMA_SHORT = 20
+SMA_LONG = 50
+
+# Backtest Settings
+INITIAL_CASH = 100000
+# -----------------------------------------------------------
+
+
+def main():
+    # Initialize Logger
+    setup_logger()
+
+    print(f"\nFetching data for {STOCK}...")
+    df = fetch_stock_data(STOCK, start_date=START_DATE)
+
+    if df.empty:
+        print("No data available. Exiting.")
+        return
+
+    print("Calculating indicators...")
+    df['RSI'] = rsi(df, period=RSI_PERIOD)
+    df['SMA20'] = sma(df, period=SMA_SHORT)
+    df['SMA50'] = sma(df, period=SMA_LONG)
+    df['MACD'], df['MACD_signal'], df['MACD_hist'] = macd(df)
+
+    print("Generating signals...")
+    df = generate_signals(df, rsi_col='RSI', sma_short_col='SMA20', sma_long_col='SMA50')
+
+    print("Backtesting strategy...")
+    results = backtest_signals(df, signal_col='Signal', price_col='Close', initial_cash=INITIAL_CASH)
+
+    final_equity = results['Total'].iloc[-1]
+    print(f"\n✅ Final Portfolio Value: ₹{final_equity:,.2f}")
+
+    # Plotting equity curve
+    plt.figure(figsize=(12, 6))
+    results['Total'].plot(label='Equity Curve', color='green')
+    results['Close'].plot(label='Close Price', secondary_y=True, alpha=0.3)
+    plt.title(f"Backtest Results for {STOCK}")
+    plt.legend()
+    plt.tight_layout()
+    plt.show()
+
+
+if __name__ == "__main__":
+    main()
