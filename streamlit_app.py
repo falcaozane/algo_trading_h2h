@@ -9,6 +9,7 @@ import pickle
 from datetime import datetime, timedelta
 import warnings
 from curl_cffi import requests
+session = requests.Session(impersonate="chrome")
 
 from indicators.rsi import rsi
 from indicators.sma import sma
@@ -25,7 +26,6 @@ from indicators.enhanced_features import (
 
 # Suppress warnings
 warnings.filterwarnings('ignore')
-session = requests.Session(impersonate="chrome")
 
 # Page config
 st.set_page_config(
@@ -74,6 +74,7 @@ def load_stock_data(symbol, start_date, end_date):
     """Load stock data from Yahoo Finance"""
     try:
         data = yf.download(symbol, start=start_date, end=end_date, session=session)
+        # Flatten the MultiIndex columns
         if data.columns.nlevels > 1:
             data.columns = [col[0] for col in data.columns]
         return data
@@ -81,22 +82,18 @@ def load_stock_data(symbol, start_date, end_date):
         st.error(f"Error loading data: {e}")
         return None
 
-
-
-
-
 def process_stock_data(df, short_period, long_period, rsi_period):
     """Process stock data to create all features"""
     df = df.copy()
     
     # Basic technical indicators
-    df['SMA20'] = sma(df['Close'], short_period)
-    df['SMA50'] = sma(df['Close'], long_period)
-    df['EMA20'] = ema(df['Close'], short_period)
-    df['EMA50'] = ema(df['Close'], long_period)
-    df['RSI14'] = rsi(df['Close'], rsi_period)
-    df['RSI20'] = rsi(df['Close'], rsi_period + 6)
-    df['MACD'], df['MACD_signal'], df['MACD_hist'] = macd(df['Close'])
+    df['SMA20'] = sma(df, short_period)
+    df['SMA50'] = sma(df, long_period)
+    df['EMA20'] = ema(df, short_period)
+    df['EMA50'] = ema(df, long_period)
+    df['RSI14'] = rsi(df, rsi_period)
+    df['RSI20'] = rsi(df, rsi_period + 6)
+    df['MACD'], df['MACD_signal'], df['MACD_hist'] = macd(df)
     
     # Bollinger Bands
     df['Upper_Band'] = df['SMA20'] + 2 * df['Close'].rolling(window=20).std()
@@ -118,7 +115,6 @@ def process_stock_data(df, short_period, long_period, rsi_period):
     df['target'] = (df['next_close'] > df['Close']).astype(int)
     
     return df
-
 
 # ========================= MAIN APPLICATION =========================
 
@@ -161,6 +157,10 @@ with tab1:
         stock_data = load_stock_data(selected_stock, start_date, end_date)
         
         if stock_data is not None and not stock_data.empty:
+            # Display sample data
+            st.subheader("📊 Latest Stock Data")
+            st.dataframe(stock_data.tail(10), use_container_width=True)
+            
             # Process the data
             processed_data = process_stock_data(stock_data, short_period, long_period, rsi_period)
             processed_data = processed_data.dropna()
@@ -181,27 +181,21 @@ with tab1:
                 with col4:
                     st.metric("RSI14", f"{latest_data['RSI14']:.2f}")
                 
-                # Mock prediction (replace with actual model loading)
-                try:
-                    # Try to load the model
-                    model = pickle.load(open('logistic_regression_model.pkl', 'rb'))
-                    scaler = pickle.load(open('scaler.pkl', 'rb'))
+                
+                model = pickle.load(open('models/logistic_regression_model.pkl', 'rb'))
+                scaler = pickle.load(open('models/scaler.pkl', 'rb'))
                     
-                    # Create feature vector
-                    feature_vector = latest_data[FEATURES].values.reshape(1, -1)
-                    feature_vector_scaled = scaler.transform(feature_vector)
+                # Create feature vector
+                feature_vector = latest_data[FEATURES].values.reshape(1, -1)
+                feature_vector_scaled = scaler.transform(feature_vector)
                     
-                    # Make prediction
-                    prediction = model.predict(feature_vector_scaled)[0]
-                    probability = model.predict_proba(feature_vector_scaled)[0].max()
-                    
-                except:
-                    # Mock prediction if model files not available
-                    prediction = np.random.choice([0, 1])
-                    probability = np.random.uniform(0.5, 0.9)
+                # Make prediction
+                prediction = model.predict(feature_vector_scaled)[0]
+                probability = model.predict_proba(feature_vector_scaled)[0].max()
+            
                 
                 # Display prediction
-                st.header("🔮 Prediction")
+                st.header("🔮 Prediction Results")
                 col1, col2 = st.columns(2)
                 
                 with col1:
@@ -276,7 +270,7 @@ with tab1:
                                                mode='lines', name='RSI14', line=dict(color='purple')))
                     fig_rsi.add_hline(y=70, line_dash="dash", line_color="red", annotation_text="Overbought")
                     fig_rsi.add_hline(y=30, line_dash="dash", line_color="green", annotation_text="Oversold")
-                    fig_rsi.update_layout(title="RSI (14-day)", height=300)
+                    fig_rsi.update_layout(title=f"RSI ({rsi_period}-day)", height=300)
                     st.plotly_chart(fig_rsi, use_container_width=True)
                 
                 with col2:
@@ -287,16 +281,6 @@ with tab1:
                                                 mode='lines', name='Signal', line=dict(color='red')))
                     fig_macd.update_layout(title="MACD", height=300)
                     st.plotly_chart(fig_macd, use_container_width=True)
-                
-                # Feature importance (mock data)
-                st.header("🎯 Key Factors")
-                mock_features = ['RSI14', 'return_lag_1', 'volatility_5d', 'MACD', 'volume_ratio_20']
-                mock_importance = [0.15, 0.12, 0.10, 0.08, 0.07]
-                
-                fig_importance = px.bar(x=mock_importance, y=mock_features, orientation='h', 
-                                      title="Feature Importance")
-                fig_importance.update_layout(height=300)
-                st.plotly_chart(fig_importance, use_container_width=True)
             
             else:
                 st.error("Not enough data to make a prediction.")
@@ -327,6 +311,12 @@ with tab2:
         if strategy_type in ["EMA-based", "Both"]:
             df = generate_signals_ema(df, rsi_col='RSI14', ema_short_col='EMA20', ema_long_col='EMA50')
         
+        # Initialize variables to avoid NameError
+        results = None
+        metrics = None
+        signal_col = None
+        strategy_name = None
+        
         # Backtesting section
         st.header("🔍 Backtesting Results")
         
@@ -339,6 +329,12 @@ with tab2:
                     df, signal_col='SMA_Signal', price_col='Close', 
                     initial_cash=initial_cash, transaction_cost=transaction_cost if use_risk_mgmt else 0
                 )
+                
+                # Set variables for common sections
+                results = sma_results
+                metrics = sma_metrics
+                signal_col = 'SMA_Signal'
+                strategy_name = 'SMA'
                 
                 # Display metrics
                 col1, col2, col3, col4 = st.columns(4)
@@ -397,6 +393,12 @@ with tab2:
                     df, signal_col='EMA_Signal', price_col='Close', 
                     initial_cash=initial_cash, transaction_cost=transaction_cost if use_risk_mgmt else 0
                 )
+                
+                # Set variables for common sections  
+                results = ema_results
+                metrics = ema_metrics
+                signal_col = 'EMA_Signal'
+                strategy_name = 'EMA'
                 
                 # Display metrics
                 col1, col2, col3, col4 = st.columns(4)
@@ -517,120 +519,236 @@ with tab2:
             fig_perf.update_layout(title=f"{strategy_name} Strategy vs Buy & Hold Performance", height=400)
             st.plotly_chart(fig_perf, use_container_width=True)
         
-        # Additional Technical Analysis Charts
-        st.header("📈 Additional Technical Analysis")
-        
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            # RSI Chart
-            fig_rsi = go.Figure()
-            fig_rsi.add_trace(go.Scatter(x=df.index, y=df['RSI14'], mode='lines', 
-                                       name='RSI14', line=dict(color='purple', width=2)))
+        # Additional Technical Analysis Charts (only show if we have results)
+        if results is not None:
+            st.header("📈 Additional Technical Analysis")
             
-            # Add buy/sell signals on RSI
-            if 'buy_signals' in locals() and not buy_signals.empty:
-                fig_rsi.add_trace(go.Scatter(x=buy_signals.index, y=buy_signals['RSI14'],
-                                           mode='markers', name='Buy Signal',
-                                           marker=dict(symbol='triangle-up', size=10, color='green'),
-                                           showlegend=False))
+            col1, col2 = st.columns(2)
             
-            if 'sell_signals' in locals() and not sell_signals.empty:
-                fig_rsi.add_trace(go.Scatter(x=sell_signals.index, y=sell_signals['RSI14'],
-                                           mode='markers', name='Sell Signal',
-                                           marker=dict(symbol='triangle-down', size=10, color='red'),
-                                           showlegend=False))
-            
-            fig_rsi.add_hline(y=70, line_dash="dash", line_color="red", annotation_text="Overbought (70)")
-            fig_rsi.add_hline(y=30, line_dash="dash", line_color="green", annotation_text="Oversold (30)")
-            fig_rsi.add_hline(y=50, line_dash="solid", line_color="gray", annotation_text="Midline (50)", opacity=0.5)
-            
-            fig_rsi.update_layout(title="RSI with Trading Signals", yaxis=dict(range=[0, 100]), height=400)
-            st.plotly_chart(fig_rsi, use_container_width=True)
-        
-        with col2:
-            # MACD Chart
-            fig_macd = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.05, row_width=[0.7, 0.3])
-            
-            # MACD line
-            fig_macd.add_trace(go.Scatter(x=df.index, y=df['MACD'], mode='lines', name='MACD',
-                                        line=dict(color='blue', width=2)), row=1, col=1)
-            
-            # Signal line
-            fig_macd.add_trace(go.Scatter(x=df.index, y=df['MACD_signal'], mode='lines', name='Signal Line',
-                                        line=dict(color='orange', width=2)), row=1, col=1)
-            
-            # Zero line
-            fig_macd.add_hline(y=0, line_dash="solid", line_color="pink", opacity=0.5, row=1, col=1)
-            
-            # MACD histogram
-            colors = ['green' if val >= 0 else 'red' for val in df['MACD_hist']]
-            fig_macd.add_trace(go.Bar(x=df.index, y=df['MACD_hist'], name='MACD Histogram',
-                                    marker_color=colors, opacity=0.6), row=2, col=1)
-            
-            fig_macd.update_layout(title="MACD Indicator", height=400, showlegend=True)
-            fig_macd.update_xaxes(title_text="Date", row=2, col=1)
-            fig_macd.update_yaxes(title_text="MACD Value", row=1, col=1)
-            fig_macd.update_yaxes(title_text="Histogram", row=2, col=1)
-            
-            st.plotly_chart(fig_macd, use_container_width=True)
-        
-        # Bollinger Bands
-        st.subheader("📈 Bollinger Bands")
-        fig_bb = go.Figure()
-        
-        fig_bb.add_trace(go.Scatter(x=df.index, y=df['Close'], mode='lines', name='Close Price',
-                                  line=dict(color='purple', width=2)))
-        fig_bb.add_trace(go.Scatter(x=df.index, y=df['SMA20'], mode='lines', name='20-day SMA',
-                                  line=dict(color='blue', width=1.5)))
-        fig_bb.add_trace(go.Scatter(x=df.index, y=df['Upper_Band'], mode='lines', name='Upper Band',
-                                  line=dict(color='red', dash='dash', width=1.5)))
-        fig_bb.add_trace(go.Scatter(x=df.index, y=df['Lower_Band'], mode='lines', name='Lower Band',
-                                  line=dict(color='green', dash='dash', width=1.5),
-                                  fill='tonexty', fillcolor='rgba(128,128,128,0.2)'))
-        
-        fig_bb.update_layout(title="Bollinger Bands", height=500)
-        st.plotly_chart(fig_bb, use_container_width=True)
-        
-        # Trade Analysis
-        if 'metrics' in locals() and not metrics['Trades DataFrame'].empty:
-            st.header("📋 Trade Analysis")
-            trades_df = metrics['Trades DataFrame']
-            
-            col1, col2, col3 = st.columns(3)
             with col1:
-                avg_duration = (pd.to_datetime(trades_df['exit_date']) - 
-                              pd.to_datetime(trades_df['entry_date'])).dt.days.mean()
-                st.metric("📅 Avg Trade Duration", f"{avg_duration:.1f} days")
+                # RSI Chart
+                fig_rsi = go.Figure()
+                fig_rsi.add_trace(go.Scatter(x=df.index, y=df['RSI14'], mode='lines', 
+                                           name='RSI14', line=dict(color='purple', width=2)))
+                
+                # Add buy/sell signals on RSI if available
+                if not buy_signals.empty:
+                    fig_rsi.add_trace(go.Scatter(x=buy_signals.index, y=buy_signals['RSI14'],
+                                               mode='markers', name='Buy Signal',
+                                               marker=dict(symbol='triangle-up', size=10, color='green'),
+                                               showlegend=False))
+                
+                if not sell_signals.empty:
+                    fig_rsi.add_trace(go.Scatter(x=sell_signals.index, y=sell_signals['RSI14'],
+                                               mode='markers', name='Sell Signal',
+                                               marker=dict(symbol='triangle-down', size=10, color='red'),
+                                               showlegend=False))
+                
+                fig_rsi.add_hline(y=70, line_dash="dash", line_color="red", annotation_text="Overbought (70)")
+                fig_rsi.add_hline(y=30, line_dash="dash", line_color="green", annotation_text="Oversold (30)")
+                fig_rsi.add_hline(y=50, line_dash="solid", line_color="gray", annotation_text="Midline (50)", opacity=0.5)
+                
+                fig_rsi.update_layout(title="RSI with Trading Signals", yaxis=dict(range=[0, 100]), height=400)
+                st.plotly_chart(fig_rsi, use_container_width=True)
+            
             with col2:
-                st.metric("🚀 Best Trade", f"{trades_df['return_pct'].max():.2%}")
-            with col3:
-                st.metric("💥 Worst Trade", f"{trades_df['return_pct'].min():.2%}")
+                # MACD Chart
+                fig_macd = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.05, row_heights=[0.7, 0.3])
+                
+                # MACD line
+                fig_macd.add_trace(go.Scatter(x=df.index, y=df['MACD'], mode='lines', name='MACD',
+                                            line=dict(color='blue', width=2)), row=1, col=1)
+                
+                # Signal line
+                fig_macd.add_trace(go.Scatter(x=df.index, y=df['MACD_signal'], mode='lines', name='Signal Line',
+                                            line=dict(color='orange', width=2)), row=1, col=1)
+                
+                # Zero line
+                fig_macd.add_hline(y=0, line_dash="solid", line_color="pink", opacity=0.5, row=1, col=1)
+                
+                # MACD histogram
+                colors = ['green' if val >= 0 else 'red' for val in df['MACD_hist']]
+                fig_macd.add_trace(go.Bar(x=df.index, y=df['MACD_hist'], name='MACD Histogram',
+                                        marker_color=colors, opacity=0.6), row=2, col=1)
+                
+                fig_macd.update_layout(title="MACD Indicator", height=400, showlegend=True)
+                fig_macd.update_xaxes(title_text="Date", row=2, col=1)
+                fig_macd.update_yaxes(title_text="MACD Value", row=1, col=1)
+                fig_macd.update_yaxes(title_text="Histogram", row=2, col=1)
+                
+                st.plotly_chart(fig_macd, use_container_width=True)
             
-            # Trade Returns Distribution
-            returns_pct = trades_df['return_pct'] * 100
-            fig_hist = px.histogram(x=returns_pct, nbins=20, title="Distribution of Trade Returns",
-                                  labels={'x': 'Return (%)', 'y': 'Number of Trades'},
-                                  color_discrete_sequence=['steelblue'])
-            fig_hist.add_vline(x=0, line_dash="dash", line_color="red", annotation_text="Break Even")
-            fig_hist.add_vline(x=returns_pct.mean(), line_dash="solid", line_color="green", 
-                             annotation_text=f"Mean: {returns_pct.mean():.1f}%")
-            fig_hist.update_layout(height=400, showlegend=False)
-            st.plotly_chart(fig_hist, use_container_width=True)
+            # Bollinger Bands
+            st.subheader("📈 Bollinger Bands")
+            fig_bb = go.Figure()
             
-            # Trade History Table
-            st.subheader("📊 Trade History")
-            display_trades = trades_df.copy()
-            display_trades['Entry Date'] = pd.to_datetime(display_trades['entry_date']).dt.strftime('%Y-%m-%d')
-            display_trades['Exit Date'] = pd.to_datetime(display_trades['exit_date']).dt.strftime('%Y-%m-%d')
-            display_trades['Entry Price'] = display_trades['entry_price'].apply(lambda x: f"₹{x:.2f}")
-            display_trades['Exit Price'] = display_trades['exit_price'].apply(lambda x: f"₹{x:.2f}")
-            display_trades['P&L'] = display_trades['profit_loss'].apply(lambda x: f"₹{x:,.2f}")
-            display_trades['Return %'] = display_trades['return_pct'].apply(lambda x: f"{x:.2%}")
+            fig_bb.add_trace(go.Scatter(x=df.index, y=df['Close'], mode='lines', name='Close Price',
+                                      line=dict(color='purple', width=2)))
+            fig_bb.add_trace(go.Scatter(x=df.index, y=df['SMA20'], mode='lines', name='20-day SMA',
+                                      line=dict(color='blue', width=1.5)))
+            fig_bb.add_trace(go.Scatter(x=df.index, y=df['Upper_Band'], mode='lines', name='Upper Band',
+                                      line=dict(color='red', dash='dash', width=1.5)))
+            fig_bb.add_trace(go.Scatter(x=df.index, y=df['Lower_Band'], mode='lines', name='Lower Band',
+                                      line=dict(color='green', dash='dash', width=1.5),
+                                      fill='tonexty', fillcolor='rgba(128,128,128,0.2)'))
             
-            trade_display = display_trades[['Entry Date', 'Exit Date', 'Entry Price', 'Exit Price', 
-                                          'P&L', 'Return %', 'exit_reason']].copy()
-            st.dataframe(trade_display, use_container_width=True)
+            fig_bb.update_layout(title="Bollinger Bands", height=500)
+            st.plotly_chart(fig_bb, use_container_width=True)
+
+            # Drawdown Analysis
+            st.subheader("📉 Drawdown Analysis")
+            
+            # Calculate drawdown
+            returns = results['Total'].pct_change().fillna(0)
+            cumulative = (1 + returns).cumprod()
+            running_max = cumulative.expanding().max()
+            drawdown = (cumulative - running_max) / running_max
+            
+            fig_dd = go.Figure()
+            
+            fig_dd.add_trace(go.Scatter(
+                x=df.index,
+                y=drawdown * 100,
+                mode='lines',
+                name='Drawdown',
+                fill='tozeroy',
+                fillcolor='rgba(255,0,0,0.3)',
+                line=dict(color='red', width=1),
+                hovertemplate='<b>Drawdown</b>: %{y:.1f}%<extra></extra>'
+            ))
+            
+            fig_dd.update_layout(
+                title="Portfolio Drawdown Over Time",
+                xaxis_title="Date",
+                yaxis_title="Drawdown (%)",
+                height=400,
+                template='plotly_white'
+            )
+            
+            st.plotly_chart(fig_dd, use_container_width=True)
+            
+            # Trade analysis
+            if metrics is not None and not metrics['Trades DataFrame'].empty:
+                st.subheader("📋 Trade Analysis")
+                
+                trades_df = metrics['Trades DataFrame']
+                
+                # Trade statistics
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    avg_trade_duration = (pd.to_datetime(trades_df['exit_date']) - 
+                                        pd.to_datetime(trades_df['entry_date'])).dt.days.mean()
+                    st.metric("📅 Avg Trade Duration", f"{avg_trade_duration:.1f} days")
+                    
+                with col2:
+                    best_trade = trades_df['return_pct'].max()
+                    st.metric("🚀 Best Trade", f"{best_trade:.2%}")
+                    
+                with col3:
+                    worst_trade = trades_df['return_pct'].min()
+                    st.metric("💥 Worst Trade", f"{worst_trade:.2%}")
+                
+                # Trade returns distribution
+                st.subheader("📊 Trade Returns Distribution")
+                
+                returns_pct = trades_df['return_pct'] * 100
+                
+                fig_hist = px.histogram(
+                    x=returns_pct,
+                    nbins=20,
+                    title="Distribution of Trade Returns",
+                    labels={'x': 'Return (%)', 'y': 'Number of Trades'},
+                    color_discrete_sequence=['steelblue']
+                )
+                
+                # Add vertical lines for mean and zero
+                fig_hist.add_vline(x=0, line_dash="dash", line_color="red", 
+                                annotation_text="Break Even")
+                fig_hist.add_vline(x=returns_pct.mean(), line_dash="solid", line_color="green", 
+                                annotation_text=f"Mean: {returns_pct.mean():.1f}%")
+                
+                fig_hist.update_layout(
+                    height=400,
+                    template='plotly_white',
+                    showlegend=False
+                )
+                
+                st.plotly_chart(fig_hist, use_container_width=True)
+                
+                # Trade timeline
+                st.subheader("📅 Trade Timeline")
+                
+                fig_timeline = go.Figure()
+                
+                for i, trade in trades_df.iterrows():
+                    color = 'green' if trade['return_pct'] > 0 else 'red'
+                    fig_timeline.add_trace(go.Scatter(
+                        x=[trade['entry_date'], trade['exit_date']],
+                        y=[trade['entry_price'], trade['exit_price']],
+                        mode='lines+markers',
+                        name=f"Trade {i+1}",
+                        line=dict(color=color, width=3),
+                        marker=dict(size=8),
+                        hovertemplate=f'<b>Trade {i+1}</b><br>' +
+                                    f'Entry: ₹{trade["entry_price"]:.2f}<br>' +
+                                    f'Exit: ₹{trade["exit_price"]:.2f}<br>' +
+                                    f'Return: {trade["return_pct"]:.2%}<br>' +
+                                    f'Duration: {(pd.to_datetime(trade["exit_date"]) - pd.to_datetime(trade["entry_date"])).days} days<extra></extra>',
+                        showlegend=False
+                    ))
+                
+                fig_timeline.update_layout(
+                    title="Individual Trade Performance Timeline",
+                    xaxis_title="Date",
+                    yaxis_title="Price (₹)",
+                    height=500,
+                    template='plotly_white'
+                )
+                
+                st.plotly_chart(fig_timeline, use_container_width=True)
+                
+                # Trade history table
+                st.subheader("📊 Detailed Trade History")
+                display_trades = trades_df.copy()
+                display_trades['Entry Date'] = pd.to_datetime(display_trades['entry_date']).dt.strftime('%Y-%m-%d')
+                display_trades['Exit Date'] = pd.to_datetime(display_trades['exit_date']).dt.strftime('%Y-%m-%d')
+                display_trades['Entry Price'] = display_trades['entry_price'].apply(lambda x: f"₹{x:.2f}")
+                display_trades['Exit Price'] = display_trades['exit_price'].apply(lambda x: f"₹{x:.2f}")
+                display_trades['P&L (₹)'] = display_trades['profit_loss'].apply(lambda x: f"₹{x:,.2f}")
+                display_trades['Return %'] = display_trades['return_pct'].apply(lambda x: f"{x:.2%}")
+                display_trades['Duration'] = (pd.to_datetime(trades_df['exit_date']) - 
+                                            pd.to_datetime(trades_df['entry_date'])).dt.days
+                
+                trade_display = display_trades[['Entry Date', 'Exit Date', 'Entry Price', 'Exit Price', 
+                                            'P&L (₹)', 'Return %', 'Duration', 'exit_reason']].copy()
+                trade_display.columns = ['Entry Date', 'Exit Date', 'Entry Price', 'Exit Price', 
+                                    'Profit/Loss', 'Return %', 'Days', 'Exit Reason']
+                
+                st.dataframe(trade_display, use_container_width=True)
+            
+            else:
+                st.info("📝 No trades were executed during this period with the current parameters.")
+            
+            # Signal summary table
+            if signal_col is not None:
+                st.subheader("📋 Trading Signals Summary")
+                signal_summary = df[df[signal_col] != 0].copy()
+                
+                if not signal_summary.empty:
+                    signal_summary['Signal Type'] = signal_summary[signal_col].map({1: '🟢 BUY', -1: '🔴 SELL'})
+                    signal_summary['Price'] = signal_summary['Close'].apply(lambda x: f"₹{x:.2f}")
+                    signal_summary['RSI'] = signal_summary['RSI14'].apply(lambda x: f"{x:.1f}")
+                    signal_summary[f'{strategy_name}{short_period}'] = signal_summary[f'{strategy_name}{short_period}'].apply(lambda x: f"₹{x:.2f}")
+                    signal_summary[f'{strategy_name}{long_period}'] = signal_summary[f'{strategy_name}{long_period}'].apply(lambda x: f"₹{x:.2f}")
+                    
+                    display_signals = signal_summary[['Signal Type', 'Price', 'RSI', 
+                                                    f'{strategy_name}{short_period}', 
+                                                    f'{strategy_name}{long_period}']].copy()
+                    display_signals.index = display_signals.index.strftime('%Y-%m-%d')
+                    
+                    st.dataframe(display_signals, use_container_width=True)
+                else:
+                    st.info("📝 No trading signals were generated during this period with the current parameters.")
         
         # Data Download Section
         st.subheader("💾 Download Data")
@@ -646,7 +764,7 @@ with tab2:
             )
         
         with col2:
-            if 'results' in locals():
+            if results is not None:
                 results_csv = results.to_csv(index=True)
                 st.download_button(
                     label="📊 Download Backtest Results (CSV)",
